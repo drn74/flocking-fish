@@ -1,8 +1,12 @@
 // The Boid class
 
 // Path following constants
-float PATH_WEIGHT     = 0.5;  // forza waypoint: bassa perche' il flocking deve dominare
-float REPULSION_WEIGHT = 3.0;  // peso forza repulsiva celle ostacolo
+float PATH_WEIGHT              = 0.5;   // forza waypoint: bassa perche' il flocking deve dominare
+float REPULSION_WEIGHT         = 3.0;   // peso forza repulsiva celle ostacolo
+float CENTROID_WEIGHT          = 1.5;   // forza centroide: attiva solo quando il boid e' isolato dal branco
+boolean BORDER_REPULSION       = true;  // true = bordo morbido; false = wraparound classico
+float BORDER_MARGIN            = 80.0;  // pixel dal bordo in cui inizia la repulsione
+float BORDER_REPULSION_WEIGHT  = 2.0;   // peso forza bordo
 
 class Boid {
 
@@ -29,8 +33,8 @@ class Boid {
     maxforce = 0.03;
   }
 
-  void run(ArrayList<Boid> boids, PVector target, Grid grid) {
-    flock(boids, target, grid);
+  void run(ArrayList<Boid> boids, PVector target, Grid grid, PVector centroid) {
+    flock(boids, target, grid, centroid);
     update();
     borders();
     render();
@@ -41,8 +45,8 @@ class Boid {
     acceleration.add(force);
   }
 
-  // Accumula forze per questo frame: flocking standard + waypoint + repulsione ostacoli simultanei.
-  void flock(ArrayList<Boid> boids, PVector target, Grid grid) {
+  // Accumula forze per questo frame: flocking standard + waypoint + repulsione ostacoli + centroid-seek.
+  void flock(ArrayList<Boid> boids, PVector target, Grid grid, PVector centroid) {
     // Forze flocking standard
     PVector sep = separate(boids);
     PVector ali = align(boids);
@@ -63,6 +67,26 @@ class Boid {
     PVector repel = repelFromObstacles(grid);
     repel.mult(REPULSION_WEIGHT);
     applyForce(repel);
+
+    // Repulsione dai bordi del canvas (bordo morbido)
+    if (BORDER_REPULSION) {
+      PVector br = repelFromBorders();
+      br.mult(BORDER_REPULSION_WEIGHT);
+      applyForce(br);
+    }
+
+    // Centroid-seek: attivo solo se il boid non ha vicini entro neighbordist (isolato dal branco)
+    int neighborCount = 0;
+    for (int i = 0; i < boids.size(); i++) {
+      Boid other = (Boid) boids.get(i);
+      float d = PVector.dist(position, other.position);
+      if (d > 0 && d < 50) neighborCount++;
+    }
+    if (neighborCount == 0) {
+      PVector cs = seek(centroid);
+      cs.mult(CENTROID_WEIGHT);
+      applyForce(cs);
+    }
   }
 
   // Method to update position
@@ -138,6 +162,33 @@ class Boid {
       steer.limit(maxforce);
     }
 
+    return steer;
+  }
+
+  // Forza di repulsione dai 4 bordi del canvas.
+  // Falloff lineare: massima al bordo, zero a BORDER_MARGIN pixel di distanza.
+  PVector repelFromBorders() {
+    PVector steer = new PVector(0, 0);
+
+    if (position.x < BORDER_MARGIN) {
+      steer.add(new PVector(1.0 - (position.x / BORDER_MARGIN), 0));
+    }
+    if (position.x > width - BORDER_MARGIN) {
+      steer.add(new PVector(-(1.0 - ((width - position.x) / BORDER_MARGIN)), 0));
+    }
+    if (position.y < BORDER_MARGIN) {
+      steer.add(new PVector(0, 1.0 - (position.y / BORDER_MARGIN)));
+    }
+    if (position.y > height - BORDER_MARGIN) {
+      steer.add(new PVector(0, -(1.0 - ((height - position.y) / BORDER_MARGIN))));
+    }
+
+    if (steer.mag() > 0) {
+      steer.normalize();
+      steer.mult(maxspeed);
+      steer.sub(velocity);
+      steer.limit(maxforce);
+    }
     return steer;
   }
 

@@ -51,7 +51,7 @@ class Flock {
     // --- Aggiorna ogni boid ---
     for (int i = 0; i < n; i++) {
       Boid b = (Boid) boids.get(i);
-      b.run(boids, target, grid);
+      b.run(boids, target, grid, centroid);
     }
   }
 

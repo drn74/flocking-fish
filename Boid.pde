@@ -1,7 +1,8 @@
 // The Boid class
 
 // Path following constants
-float PATH_WEIGHT = 0.5;  // forza waypoint: bassa perche' il flocking deve dominare
+float PATH_WEIGHT     = 0.5;  // forza waypoint: bassa perche' il flocking deve dominare
+float REPULSION_WEIGHT = 3.0;  // peso forza repulsiva celle ostacolo
 
 class Boid {
 
@@ -9,8 +10,8 @@ class Boid {
   PVector velocity;
   PVector acceleration;
   float r;
-  float maxforce;    // Maximum steering force
-  float maxspeed;    // Maximum speed
+  float maxforce;       // Maximum steering force
+  float maxspeed;       // Maximum speed
 
     Boid(float x, float y) {
     acceleration = new PVector(0, 0);
@@ -28,8 +29,8 @@ class Boid {
     maxforce = 0.03;
   }
 
-  void run(ArrayList<Boid> boids, PVector target) {
-    flock(boids, target);
+  void run(ArrayList<Boid> boids, PVector target, Grid grid) {
+    flock(boids, target, grid);
     update();
     borders();
     render();
@@ -40,24 +41,28 @@ class Boid {
     acceleration.add(force);
   }
 
-  // We accumulate a new acceleration each time based on three rules + waypoint steering
-  void flock(ArrayList<Boid> boids, PVector target) {
-    PVector sep = separate(boids);   // Separation
-    PVector ali = align(boids);      // Alignment
-    PVector coh = cohesion(boids);   // Cohesion
-    // Arbitrarily weight these forces
+  // Accumula forze per questo frame: flocking standard + waypoint + repulsione ostacoli simultanei.
+  void flock(ArrayList<Boid> boids, PVector target, Grid grid) {
+    // Forze flocking standard
+    PVector sep = separate(boids);
+    PVector ali = align(boids);
+    PVector coh = cohesion(boids);
     sep.mult(1.5);
     ali.mult(1.0);
     coh.mult(1.0);
-    // Add the force vectors to acceleration
     applyForce(sep);
     applyForce(ali);
     applyForce(coh);
 
-    // Waypoint steering — target condiviso dal branco, peso basso per non annullare il flocking
+    // Waypoint steering — sempre attivo
     PVector pf = followTarget(target);
     pf.mult(PATH_WEIGHT);
     applyForce(pf);
+
+    // Repulsione radiale dalle celle ostacolo
+    PVector repel = repelFromObstacles(grid);
+    repel.mult(REPULSION_WEIGHT);
+    applyForce(repel);
   }
 
   // Method to update position
@@ -94,11 +99,51 @@ class Boid {
     return seek(target);
   }
 
+  // Forza di repulsione radiale aggregata da tutte le celle ostacolo attive.
+  // La forza e' proporzionale alla vicinanza al centro: massima al centro, zero al raggio.
+  PVector repelFromObstacles(Grid grid) {
+    PVector steer = new PVector(0, 0);
+    int count = 0;
+    float repRadius = grid.getRepulsionRadius();
+
+    for (int c = 0; c < grid.cols; c++) {
+      for (int r = 0; r < grid.rows; r++) {
+        if (grid.getCell(c, r)) {
+          PVector center = grid.getCellCenter(c, r);
+          float d = PVector.dist(position, center);
+          if (d < repRadius && d > 0) {
+            // Direzione: via dal centro della cella
+            PVector away = PVector.sub(position, center);
+            away.normalize();
+            // Intensita': lineare, da 1.0 (al centro) a 0.0 (al bordo del raggio)
+            float strength = 1.0 - (d / repRadius);
+            away.mult(strength);
+            steer.add(away);
+            count++;
+          }
+        }
+      }
+    }
+
+    if (count > 0) {
+      steer.div((float) count);
+    }
+
+    // Steering Reynolds: desired - velocity, limitato a maxforce
+    // setMag() non disponibile in Processing.js v1.6.6 — normalize + mult manuale
+    if (steer.mag() > 0) {
+      steer.normalize();
+      steer.mult(maxspeed);
+      steer.sub(velocity);
+      steer.limit(maxforce);
+    }
+
+    return steer;
+  }
+
   void render() {
-    // Draw a triangle rotated in the direction of velocity
     float theta = velocity.heading2D() + radians(90);
-    // heading2D() is correct for Processing.js v1.6.6 — do NOT change to heading()
-    
+    // heading2D() corretto per Processing.js v1.6.6 — non usare heading()
     fill(200, 100);
     stroke(255);
     pushMatrix();

@@ -1,7 +1,11 @@
 // The Boid class
 
-// Path following constants
-float PATH_WEIGHT = 0.5;  // forza waypoint: bassa perche' il flocking deve dominare
+// Path following and panic constants
+float PATH_WEIGHT        = 0.5;   // forza waypoint: bassa perche' il flocking deve dominare
+float AVOID_WEIGHT       = 3.0;   // peso massimo fuga ostacoli (a panicLevel = 1.0)
+float DECAY_RATE         = 0.97;  // smorzamento panico per frame (~100 frame a calma completa)
+float PROPAGATION_FACTOR = 0.75;  // frazione panico trasmessa ai vicini
+float PANIC_RADIUS       = 50.0;  // raggio entro cui si propaga il panico tra boid
 
 class Boid {
 
@@ -11,14 +15,12 @@ class Boid {
   float r;
   float maxforce;    // Maximum steering force
   float maxspeed;    // Maximum speed
+  float panicLevel;  // 0.0 = calmo, 1.0 = panico pieno
 
-    Boid(float x, float y) {
+  Boid(float x, float y) {
     acceleration = new PVector(0, 0);
 
-    // This is a new PVector method not yet implemented in JS
-    // velocity = PVector.random2D();
-
-    // Leaving the code temporarily this way so that this example runs in JS
+    // PVector.random2D() non e' implementato in Processing.js v1.6.6 — angolo manuale
     float angle = random(TWO_PI);
     velocity = new PVector(cos(angle), sin(angle));
 
@@ -26,10 +28,11 @@ class Boid {
     r = 2.0;
     maxspeed = 2;
     maxforce = 0.03;
+    panicLevel = 0.0;
   }
 
-  void run(ArrayList<Boid> boids, PVector target) {
-    flock(boids, target);
+  void run(ArrayList<Boid> boids, PVector target, ArrayList<Obstacle> obstacles) {
+    flock(boids, target, obstacles);
     update();
     borders();
     render();
@@ -40,16 +43,17 @@ class Boid {
     acceleration.add(force);
   }
 
-  // We accumulate a new acceleration each time based on three rules + waypoint steering
-  void flock(ArrayList<Boid> boids, PVector target) {
-    PVector sep = separate(boids);   // Separation
-    PVector ali = align(boids);      // Alignment
-    PVector coh = cohesion(boids);   // Cohesion
-    // Arbitrarily weight these forces
+  // Accumula acceleration da tutte le forze: flocking, waypoint, propagazione panico, fuga ostacoli.
+  // Ordine critico: propagazione PRIMA del decay; avoidObstacles() DOPO il decay
+  // (sovrascrive panicLevel a 1.0 se il boid e' dentro un ostacolo).
+  void flock(ArrayList<Boid> boids, PVector target, ArrayList<Obstacle> obstacles) {
+    // --- Forze flocking standard ---
+    PVector sep = separate(boids);
+    PVector ali = align(boids);
+    PVector coh = cohesion(boids);
     sep.mult(1.5);
     ali.mult(1.0);
     coh.mult(1.0);
-    // Add the force vectors to acceleration
     applyForce(sep);
     applyForce(ali);
     applyForce(coh);
@@ -58,6 +62,79 @@ class Boid {
     PVector pf = followTarget(target);
     pf.mult(PATH_WEIGHT);
     applyForce(pf);
+
+    // --- Propagazione panico (PRIMA del decay) ---
+    // Legge panicLevel dei vicini e aggiorna il proprio — non modifica i vicini.
+    // Cast esplicito (Boid) necessario: Processing.js tratta ArrayList come non-generica a runtime.
+    for (int i = 0; i < boids.size(); i++) {
+      Boid other = (Boid) boids.get(i);
+      float d = PVector.dist(position, other.position);
+      if (d > 0 && d < PANIC_RADIUS) {
+        panicLevel = max(panicLevel, other.panicLevel * PROPAGATION_FACTOR);
+      }
+    }
+
+    // --- Decay panico (DOPO la propagazione) ---
+    // Se il boid e' dentro un ostacolo, avoidObstacles() riportera' panicLevel a 1.0.
+    panicLevel = panicLevel * DECAY_RATE;
+
+    // --- Forza di fuga ostacoli ---
+    // avoidObstacles() imposta panicLevel=1.0 se il boid e' dentro un ostacolo (override del decay).
+    PVector avoid = avoidObstacles(obstacles);
+    avoid.mult(AVOID_WEIGHT * panicLevel);
+    applyForce(avoid);
+  }
+
+  // Calcola la forza di fuga aggregata da tutti gli ostacoli.
+  // Effetto collaterale: imposta panicLevel = 1.0 se il boid e' dentro almeno un ostacolo.
+  // La forza restituita e' gia' nella forma Reynolds steering (desired - velocity), limitata a maxforce.
+  PVector avoidObstacles(ArrayList<Obstacle> obstacles) {
+    PVector steer = new PVector(0, 0);
+    int count = 0;
+    boolean inObstacle = false;
+
+    for (int i = 0; i < obstacles.size(); i++) {
+      Obstacle obs = (Obstacle) obstacles.get(i);
+      float d = PVector.dist(position, obs.position);
+
+      if (d < obs.radius) {
+        // Trigger primario: boid dentro il raggio — panico immediato
+        inObstacle = true;
+
+        // Vettore di fuga: punta via dall'ostacolo
+        PVector away = PVector.sub(position, obs.position);
+        // Se il boid e' esattamente al centro (d==0), scegliere direzione casuale
+        if (away.mag() == 0) {
+          float angle = random(TWO_PI);
+          away = new PVector(cos(angle), sin(angle));
+        }
+        away.normalize();
+        // Scala inversamente alla distanza: piu' vicino = forza maggiore; d+1 evita divisione per zero
+        away.div(d + 1);
+        steer.add(away);
+        count++;
+      }
+    }
+
+    // Imposta panico solo se il boid e' dentro un ostacolo in questo frame
+    if (inObstacle) {
+      panicLevel = 1.0;
+    }
+
+    if (count > 0) {
+      steer.div((float) count);
+    }
+
+    // Applica Reynolds steering se la forza e' non nulla
+    // setMag() non disponibile in Processing.js v1.6.6 — normalize + mult manuale
+    if (steer.mag() > 0) {
+      steer.normalize();
+      steer.mult(maxspeed);
+      steer.sub(velocity);
+      steer.limit(maxforce);
+    }
+
+    return steer;
   }
 
   // Method to update position
@@ -95,11 +172,18 @@ class Boid {
   }
 
   void render() {
-    // Draw a triangle rotated in the direction of velocity
+    // heading2D() corretto per Processing.js v1.6.6 — non usare heading()
     float theta = velocity.heading2D() + radians(90);
-    // heading2D() is correct for Processing.js v1.6.6 — do NOT change to heading()
-    
-    fill(200, 100);
+
+    // Interpola colore tra calmo (grigio-azzurro) e panico (rosso-arancio)
+    // panicLevel = 0.0 → fill(200, 200, 220, 100)
+    // panicLevel = 1.0 → fill(255, 80, 30, 180)
+    float r_col = lerp(200, 255, panicLevel);
+    float g_col = lerp(200, 80,  panicLevel);
+    float b_col = lerp(220, 30,  panicLevel);
+    float a_col = lerp(100, 180, panicLevel);
+
+    fill(r_col, g_col, b_col, a_col);
     stroke(255);
     pushMatrix();
     translate(position.x, position.y);

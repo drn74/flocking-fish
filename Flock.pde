@@ -9,7 +9,7 @@ class Flock {
     boids = new ArrayList<Boid>(); // Initialize the ArrayList
   }
 
-  void run(PathSpline spline) {
+  void run(PathSpline spline, ArrayList<Obstacle> obstacles) {
     // 1. Recupera il target condiviso corrente
     PVector target = spline.getCurrentTarget();
 
@@ -29,9 +29,9 @@ class Flock {
       target = spline.getCurrentTarget();  // aggiorna il riferimento dopo lo switch
     }
 
-    // 4. Propaga il target condiviso a ogni boid
+    // 4. Propaga il target e la lista ostacoli a ogni boid
     for (Boid b : boids) {
-      b.run(boids, target);
+      b.run(boids, target, obstacles);
     }
   }
 

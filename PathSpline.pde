@@ -59,8 +59,10 @@ class PathSpline {
     strokeWeight(1);  // reset — evita contaminazione rendering boid
   }
 
-  // Inizia il drag del control point piu' vicino entro SPLINE_CP_RADIUS * 1.5
-  void handleMousePressed(float mx, float my) {
+  // Inizia il drag del control point piu' vicino entro SPLINE_CP_RADIUS * 1.5.
+  // Restituisce true se un CP e' stato agganciato (il click non deve fare altro),
+  // false se nessun CP e' stato colpito (il click e' libero per altre azioni).
+  boolean handleMousePressed(float mx, float my) {
     dragIndex = -1;
     int N = pts.size();
     for (int i = 0; i < N; i++) {
@@ -68,9 +70,10 @@ class PathSpline {
       float d = dist(mx, my, p.x, p.y);
       if (d < SPLINE_CP_RADIUS * 1.5) {
         dragIndex = i;
-        return;
+        return true;   // CP agganciato — stop, non aggiungere ostacolo
       }
     }
+    return false;      // nessun CP colpito — click libero per ostacoli
   }
 
   // Sposta il CP in drag alla posizione del mouse

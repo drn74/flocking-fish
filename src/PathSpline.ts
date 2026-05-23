@@ -4,7 +4,7 @@
 
 import * as PIXI from 'pixi.js';
 import { Vector2D } from './Vector2D.ts';
-import { config } from './config.ts';
+import { sharedConfig } from './config.ts';
 
 const CP_RADIUS = 8;          // visual + hit-test radius (matches SPLINE_CP_RADIUS)
 const HIT_MULTIPLIER = 1.5;   // hit zone = CP_RADIUS * 1.5
@@ -15,8 +15,16 @@ export class PathSpline {
   private dragIndex: number;  // index of CP being dragged, -1 if none
 
   readonly graphics: PIXI.Graphics;
+  private readonly cpColor: number;
+  private readonly activeColor: number;
 
-  constructor(cx: number, cy: number, rx: number, ry: number) {
+  constructor(
+    cx: number, cy: number, rx: number, ry: number,
+    cpColor: number = 0x00c8ff,
+    activeColor: number = 0xffdc00,
+  ) {
+    this.cpColor = cpColor;
+    this.activeColor = activeColor;
     this.pts = [];
     this.dragIndex = -1;
     this.currentIndex = 0;
@@ -91,22 +99,22 @@ export class PathSpline {
     const g = this.graphics;
     g.clear();
 
-    if (!config.showPath) return;
+    if (!sharedConfig.showPath) return;
 
     for (let i = 0; i < this.pts.length; i++) {
       const p = this.pts[i];
       const isCurrent = i === this.currentIndex;
 
       if (isCurrent) {
-        // Yellow: current target
+        // Active target
         g.circle(p.x, p.y, CP_RADIUS);
-        g.fill({ color: 0xffdc00, alpha: 0.24 });
+        g.fill({ color: this.activeColor, alpha: 0.24 });
         g.circle(p.x, p.y, CP_RADIUS);
-        g.stroke({ color: 0xffdc00, width: 1.5 });
+        g.stroke({ color: this.activeColor, width: 1.5 });
       } else {
-        // Cyan: other waypoints
+        // Other waypoints
         g.circle(p.x, p.y, CP_RADIUS);
-        g.stroke({ color: 0x00c8ff, width: 1.5 });
+        g.stroke({ color: this.cpColor, width: 1.5 });
       }
     }
   }

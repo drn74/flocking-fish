@@ -7,8 +7,14 @@
 
 import * as PIXI from 'pixi.js';
 import { Vector2D } from './Vector2D.ts';
-import { config } from './config.ts';
+import { sharedConfig } from './config.ts';
+import type { FlockConfig } from './config.ts';
 import type { Grid } from './Grid.ts';
+
+// Distance from the flock centroid beyond which a boid is treated as "lost"
+// and pulled back, even if it has nearby buddies. Covers the failure mode
+// where two boids drift together and reinforce each other's heading.
+const ISOLATION_DISTANCE = 150;
 
 export class Boid {
   position: Vector2D;
@@ -16,13 +22,16 @@ export class Boid {
   acceleration: Vector2D;
 
   readonly r: number = 2.0;
-  get maxspeed(): number { return config.maxSpeed; }
-  get maxforce(): number { return config.maxForce; }
+  get maxspeed(): number { return this.cfg.maxSpeed; }
+  get maxforce(): number { return this.cfg.maxForce; }
+
+  private readonly cfg: FlockConfig;
 
   // PIXI display object — shape drawn once, position/rotation updated every frame
   readonly gfx: PIXI.Graphics;
 
-  constructor(x: number, y: number) {
+  constructor(x: number, y: number, cfg: FlockConfig) {
+    this.cfg = cfg;
     this.position = new Vector2D(x, y);
     this.acceleration = new Vector2D(0, 0);
 
@@ -42,7 +51,7 @@ export class Boid {
     const r = this.r;
     this.gfx
       .poly([0, -r * 2, -r, r * 2, r, r * 2], true)
-      .fill({ color: 0xc8c8c8, alpha: 0.39 })
+      .fill({ color: this.cfg.boidColor, alpha: this.cfg.boidAlpha })
       .stroke({ color: 0xffffff, width: 1 });
   }
 
@@ -51,14 +60,14 @@ export class Boid {
   }
 
   // Accumulate all forces for this frame
-  flock(boids: Boid[], target: Vector2D, grid: Grid, centroid: Vector2D, canvasW: number, canvasH: number): void {
+  flock(boids: Boid[], enemyBoids: Boid[], target: Vector2D, grid: Grid, centroid: Vector2D, canvasW: number, canvasH: number): void {
     const sep = this.separate(boids);
     const ali = this.align(boids);
     const coh = this.cohesion(boids);
 
-    sep.mult(config.weights.separation);
-    ali.mult(config.weights.alignment);
-    coh.mult(config.weights.cohesion);
+    sep.mult(this.cfg.weights.separation);
+    ali.mult(this.cfg.weights.alignment);
+    coh.mult(this.cfg.weights.cohesion);
 
     this.applyForce(sep);
     this.applyForce(ali);
@@ -66,31 +75,40 @@ export class Boid {
 
     // Waypoint steering — always active
     const pf = this.followTarget(target);
-    pf.mult(config.weights.pathFollowing);
+    pf.mult(this.cfg.weights.pathFollowing);
     this.applyForce(pf);
 
     // Radial repulsion from obstacle cells
     const repel = this.repelFromObstacles(grid);
-    repel.mult(config.weights.obstacleRepulsion);
+    repel.mult(this.cfg.weights.obstacleRepulsion);
     this.applyForce(repel);
 
     // Soft border repulsion
-    if (config.borderRepulsionEnabled) {
+    if (sharedConfig.borderRepulsionEnabled) {
       const br = this.repelFromBorders(canvasW, canvasH);
-      br.mult(config.weights.borderRepulsion);
+      br.mult(this.cfg.weights.borderRepulsion);
       this.applyForce(br);
     }
 
-    // Centroid-seek: only when boid has no neighbors within 50px
-    // (fixed 50px threshold, NOT neighborDist from config — matches .pde)
+    // Cross-flock separation — repulsion only, does not affect own alignment/cohesion
+    const crossSep = this.separateFromEnemy(enemyBoids);
+    crossSep.mult(sharedConfig.crossFlockSeparationWeight);
+    this.applyForce(crossSep);
+
+    // Centroid-seek: pull lone or strayed boids back to the school.
+    // Trigger A: no neighbors within 50px (truly isolated — matches .pde).
+    // Trigger B: farther than ISOLATION_DISTANCE from the flock centroid
+    //   (covers the 2-buddies-drifting-together case where neighborCount === 1
+    //   would otherwise suppress the recovery force indefinitely).
     let neighborCount = 0;
     for (const other of boids) {
       const d = Vector2D.dist(this.position, other.position);
       if (d > 0 && d < 50) neighborCount++;
     }
-    if (neighborCount === 0) {
+    const distFromCentroid = Vector2D.dist(this.position, centroid);
+    if (neighborCount === 0 || distFromCentroid > ISOLATION_DISTANCE) {
       const cs = this.seek(centroid);
-      cs.mult(config.weights.centroidSeek);
+      cs.mult(this.cfg.weights.centroidSeek);
       this.applyForce(cs);
     }
   }
@@ -102,13 +120,15 @@ export class Boid {
     this.acceleration.mult(0);
   }
 
-  // Wraparound borders — safety net even when border repulsion is active
+  // Hard boundary — clamps position to canvas and zeroes out velocity
+  // toward the wall. The border repulsion force deflects boids before
+  // they reach the edge; this is the absolute fallback.
   borders(canvasW: number, canvasH: number): void {
     const r = this.r;
-    if (this.position.x < -r) this.position.x = canvasW + r;
-    if (this.position.y < -r) this.position.y = canvasH + r;
-    if (this.position.x > canvasW + r) this.position.x = -r;
-    if (this.position.y > canvasH + r) this.position.y = -r;
+    if (this.position.x < r)          { this.position.x = r;          if (this.velocity.x < 0) this.velocity.x = 0; }
+    if (this.position.y < r)          { this.position.y = r;          if (this.velocity.y < 0) this.velocity.y = 0; }
+    if (this.position.x > canvasW - r){ this.position.x = canvasW - r; if (this.velocity.x > 0) this.velocity.x = 0; }
+    if (this.position.y > canvasH - r){ this.position.y = canvasH - r; if (this.velocity.y > 0) this.velocity.y = 0; }
   }
 
   // Sync PIXI graphics to physics state
@@ -137,7 +157,7 @@ export class Boid {
   // --- Separation ---
 
   separate(boids: Boid[]): Vector2D {
-    const desiredSeparation = config.separationDist;
+    const desiredSeparation = this.cfg.separationDist;
     const steer = new Vector2D(0, 0);
     let count = 0;
 
@@ -164,10 +184,43 @@ export class Boid {
     return steer;
   }
 
+  // --- Cross-flock separation ---
+  // Repels this boid away from enemy-flock boids.
+  // Uses own separationDist as detection radius.
+  // Does NOT affect alignment or cohesion of the own flock.
+
+  separateFromEnemy(enemyBoids: Boid[]): Vector2D {
+    const desiredSeparation = this.cfg.separationDist;
+    const steer = new Vector2D(0, 0);
+    let count = 0;
+
+    for (const other of enemyBoids) {
+      const d = Vector2D.dist(this.position, other.position);
+      if (d > 0 && d < desiredSeparation) {
+        const diff = Vector2D.sub(this.position, other.position);
+        diff.normalize();
+        diff.div(d);
+        steer.add(diff);
+        count++;
+      }
+    }
+
+    if (count > 0) steer.div(count);
+
+    if (steer.mag() > 0) {
+      steer.normalize();
+      steer.mult(this.maxspeed);
+      steer.sub(this.velocity);
+      steer.limit(this.maxforce);
+    }
+
+    return steer;
+  }
+
   // --- Alignment ---
 
   align(boids: Boid[]): Vector2D {
-    const neighborDist = config.neighborDist;
+    const neighborDist = this.cfg.neighborDist;
     const sum = new Vector2D(0, 0);
     let count = 0;
 
@@ -194,7 +247,7 @@ export class Boid {
   // --- Cohesion ---
 
   cohesion(boids: Boid[]): Vector2D {
-    const neighborDist = config.neighborDist;
+    const neighborDist = this.cfg.neighborDist;
     const sum = new Vector2D(0, 0);
     let count = 0;
 
@@ -260,7 +313,7 @@ export class Boid {
 
   repelFromBorders(canvasW: number, canvasH: number): Vector2D {
     const steer = new Vector2D(0, 0);
-    const margin = config.borderMargin;
+    const margin = sharedConfig.borderMargin;
     const W = canvasW;
     const H = canvasH;
 

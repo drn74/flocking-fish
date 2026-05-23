@@ -5,7 +5,7 @@
 
 import * as PIXI from 'pixi.js';
 import { Vector2D } from './Vector2D.ts';
-import { config } from './config.ts';
+import { sharedConfig } from './config.ts';
 
 export class Grid {
   cols: number;
@@ -71,7 +71,7 @@ export class Grid {
   // Repulsion radius: 1.5x inscribed radius of the cell
   getRepulsionRadius(): number {
     const inscribed = Math.min(this.cellW, this.cellH) / 2;
-    return inscribed * config.repulsionRadiusFactor;
+    return inscribed * sharedConfig.repulsionRadiusFactor;
   }
 
   // --- Rendering ---
@@ -80,7 +80,7 @@ export class Grid {
     const g = this.graphics;
     g.clear();
 
-    if (!config.showGrid) return;
+    if (!sharedConfig.showGrid) return;
 
     // 1. Red overlay for obstacle cells (drawn first, under grid lines)
     for (let c = 0; c < this.cols; c++) {

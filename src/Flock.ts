@@ -8,12 +8,15 @@ import { Boid } from './Boid.ts';
 import type { PathSpline } from './PathSpline.ts';
 import type { Grid } from './Grid.ts';
 import { Vector2D } from './Vector2D.ts';
-import { config } from './config.ts';
+import { sharedConfig } from './config.ts';
+import type { FlockConfig } from './config.ts';
 
 export class Flock {
   boids: Boid[];
+  private readonly cfg: FlockConfig;
 
-  constructor() {
+  constructor(cfg: FlockConfig) {
+    this.cfg = cfg;
     this.boids = [];
   }
 
@@ -21,7 +24,7 @@ export class Flock {
     this.boids.push(b);
   }
 
-  run(spline: PathSpline, grid: Grid, canvasW: number, canvasH: number): void {
+  run(spline: PathSpline, grid: Grid, enemyFlock: Flock, canvasW: number, canvasH: number): void {
     const n = this.boids.length;
 
     // --- Centroid of the flock ---
@@ -49,7 +52,7 @@ export class Flock {
         spline.advanceTarget();
       } else {
         // Waypoint is safe: normal arrival check
-        if (Vector2D.dist(centroid, spline.getCurrentTarget()) < config.arrivalRadius) {
+        if (Vector2D.dist(centroid, spline.getCurrentTarget()) < sharedConfig.arrivalRadius) {
           spline.advanceTarget();
         }
       }
@@ -61,7 +64,7 @@ export class Flock {
 
     // --- Update each boid ---
     for (const b of this.boids) {
-      b.flock(this.boids, target, grid, centroid, canvasW, canvasH);
+      b.flock(this.boids, enemyFlock.boids, target, grid, centroid, canvasW, canvasH);
       b.update();
       b.borders(canvasW, canvasH);
       b.render();
@@ -73,8 +76,8 @@ export class Flock {
     const cx = canvasW / 2;
     const cy = canvasH / 2;
     this.boids = [];
-    for (let i = 0; i < config.boidCount; i++) {
-      this.boids.push(new Boid(cx, cy));
+    for (let i = 0; i < this.cfg.boidCount; i++) {
+      this.boids.push(new Boid(cx, cy, this.cfg));
     }
   }
 }
